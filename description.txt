@@ -1,0 +1,390 @@
+// =====================================================
+// NodeMCU ESP8266
+// 2 Ultrasonic Sensors + IR Blink Sensor + Buzzer
+// =====================================================
+
+// ---------------- Ultrasonic 1 ----------------
+#define TRIG1 D1
+#define ECHO1 D2
+
+// ---------------- Ultrasonic 2 ----------------
+#define TRIG2 D5
+#define ECHO2 D6
+
+// ---------------- IR Blink Sensor ----------------
+#define IR_SENSOR D7
+
+// ---------------- Buzzer ----------------
+#define BUZZER D0
+
+float distance1 = 0;
+float distance2 = 0;
+
+// Eye close timing
+unsigned long eyeCloseStart = 0;
+bool eyeClosed = false;
+
+void setup() {
+
+  Serial.begin(115200);
+  delay(1000);
+
+  // Ultrasonic pins
+  pinMode(TRIG1, OUTPUT);
+  pinMode(ECHO1, INPUT);
+
+  pinMode(TRIG2, OUTPUT);
+  pinMode(ECHO2, INPUT);
+
+  // IR Sensor
+  pinMode(IR_SENSOR, INPUT);
+
+  // Buzzer
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW);
+
+  Serial.println("================================");
+  Serial.println("NodeMCU ESP8266 Started");
+  Serial.println("================================");
+}
+
+// =====================================================
+// Distance Function
+// =====================================================
+float getDistance(int trigPin, int echoPin) {
+
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH, 30000);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  float distance = duration * 0.0343 / 2;
+
+  return distance;
+}
+
+void loop() {
+
+  // =================================================
+  // Read Ultrasonic Sensors
+  // =================================================
+
+  distance1 = getDistance(TRIG1, ECHO1);
+  delay(50);
+
+  distance2 = getDistance(TRIG2, ECHO2);
+  delay(50);
+
+  // =================================================
+  // Read IR Blink Sensor
+  // =================================================
+
+  bool blinkState = digitalRead(IR_SENSOR);
+
+  // =================================================
+  // Eye Closed Detection
+  // REVERSED CONDITION:
+  // LOW = Eye Closed
+  // HIGH = Eye Open
+  // =================================================
+
+  bool eyeAlert = false;
+
+  if (blinkState == LOW) {
+
+    if (!eyeClosed) {
+      eyeCloseStart = millis();
+      eyeClosed = true;
+    }
+
+    // Eye closed for more than 3000 ms
+    if (millis() - eyeCloseStart >= 3000) {
+
+      eyeAlert = true;
+    }
+
+  } else {
+
+    eyeClosed = false;
+  }
+
+  // =================================================
+  // Distance Alert
+  // =================================================
+
+  bool distanceAlert = false;
+
+  if ((distance1 > 0 && distance1 < 60) ||
+      (distance2 > 0 && distance2 < 60)) {
+
+    distanceAlert = true;
+  }
+
+  // =================================================
+  // Buzzer Control
+  // =================================================
+
+  if (distanceAlert || eyeAlert) {
+
+    digitalWrite(BUZZER, HIGH);
+
+  } else {
+
+    digitalWrite(BUZZER, LOW);
+  }
+
+  // =================================================
+  // SERIAL MONITOR OUTPUT
+  // =================================================
+
+  Serial.println("========== SENSOR DATA ==========");
+
+  // Distance 1
+  Serial.print("Distance 1: ");
+
+  if (distance1 == -1) {
+    Serial.println("Out of Range");
+  } else {
+    Serial.print(distance1);
+    Serial.println(" cm");
+  }
+
+  // Distance 2
+  Serial.print("Distance 2: ");
+
+  if (distance2 == -1) {
+    Serial.println("Out of Range");
+  } else {
+    Serial.print(distance2);
+    Serial.println(" cm");
+  }
+
+  // Eye Status
+  Serial.print("Eye Status: ");
+
+  if (blinkState == LOW) {
+    Serial.println("EYE CLOSED");
+  } else {
+    Serial.println("EYE OPEN");
+  }
+
+  // Alerts
+  if (distanceAlert) {
+    Serial.println("WARNING: OBJECT TOO CLOSE!");
+  }
+
+  if (eyeAlert) {
+    Serial.println("WARNING: DRIVER DROWSINESS!");
+  }
+
+  Serial.println("=================================");
+  Serial.println();
+
+  delay(200);
+}
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_ADXL345_U.h>
+
+// =====================================================
+// FEATURE 1 : ALCOHOL DETECTION
+// =====================================================
+#define MQ3_PIN 1
+#define RELAY_PIN 5
+#define LED_PIN 2
+
+const int THRESHOLD = 700;
+
+// =====================================================
+// WIFI
+// =====================================================
+const char* ssid = "UIU-STUDENT";
+const char* password = "12345678";
+
+// =====================================================
+// TELEGRAM
+// =====================================================
+#define BOT_TOKEN "8604983741:AAHWSpK-Krx6gIWSdyREF7XK9UzVd0UOgU4"
+#define CHAT_ID "8605834009"
+
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOT_TOKEN, client);
+
+// =====================================================
+// GPS
+// =====================================================
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1);
+
+// =====================================================
+// FEATURE 2 : ADXL345 ACCIDENT DETECTION
+// =====================================================
+Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
+
+bool sosSent = false;
+
+unsigned long lastAlcoholCheck = 0;
+
+void setup() {
+
+  Serial.begin(115200);
+
+  // -------------------------------
+  // Alcohol Detection Setup
+  // -------------------------------
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
+
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+
+  Serial.println("Alcohol System Ready");
+
+  // -------------------------------
+  // ADXL345 Setup
+  // -------------------------------
+  Wire.begin(8, 9);
+
+  if (!accel.begin()) {
+    Serial.println("ADXL345 not found!");
+    while (1);
+  }
+
+  Serial.println("ADXL345 Connected");
+
+  // -------------------------------
+  // GPS Setup
+  // -------------------------------
+  gpsSerial.begin(9600, SERIAL_8N1, 15, 16);
+
+  // -------------------------------
+  // WiFi Setup
+  // -------------------------------
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting WiFi");
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi Connected");
+
+  client.setInsecure();
+
+  bot.sendMessage(CHAT_ID,
+                  "System Started Successfully",
+                  "");
+
+  Serial.println("All Systems Ready");
+}
+
+void loop() {
+
+  // =====================================================
+  // GPS UPDATE
+  // =====================================================
+  while (gpsSerial.available()) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // =====================================================
+  // FEATURE 1 : ALCOHOL DETECTION
+  // =====================================================
+  if (millis() - lastAlcoholCheck >= 3000) {
+
+    lastAlcoholCheck = millis();
+
+    int alcoholValue = analogRead(MQ3_PIN);
+
+    Serial.print("Alcohol Value: ");
+    Serial.println(alcoholValue);
+
+    if (alcoholValue >= THRESHOLD) {
+
+      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(RELAY_PIN, HIGH);
+
+      Serial.println("ALCOHOL DETECTED -> MOTOR OFF");
+    }
+    else {
+
+      digitalWrite(LED_PIN, LOW);
+      digitalWrite(RELAY_PIN, LOW);
+
+      Serial.println("SAFE -> MOTOR ON");
+    }
+  }
+
+  // =====================================================
+  // FEATURE 2 + FEATURE 5
+  // ACCIDENT DETECTION + SOS
+  // =====================================================
+  sensors_event_t event;
+  accel.getEvent(&event);
+
+  float ax = event.acceleration.x;
+  float ay = event.acceleration.y;
+  float az = event.acceleration.z;
+
+  float totalAcc = sqrt(ax * ax + ay * ay + az * az);
+
+  Serial.print("ACC: ");
+  Serial.println(totalAcc);
+
+  if (totalAcc > 20 && !sosSent) {
+
+    Serial.println("Possible Accident!");
+
+    delay(5000);
+
+    sensors_event_t check;
+    accel.getEvent(&check);
+
+    if (abs(check.acceleration.z) < 3) {
+
+      String msg = "🚨 SOS ALERT!\n\nAccident Detected!";
+
+      if (gps.location.isValid()) {
+
+        float lat = gps.location.lat();
+        float lng = gps.location.lng();
+
+        msg += "\n\nLocation:\n";
+        msg += "https://maps.google.com/?q=";
+        msg += String(lat, 6);
+        msg += ",";
+        msg += String(lng, 6);
+      }
+      else {
+
+        msg += "\nGPS Location Not Available";
+      }
+
+      bot.sendMessage(CHAT_ID, msg, "");
+
+      Serial.println("SOS SENT");
+
+      sosSent = true;
+    }
+  }
+
+  delay(200);
+}
